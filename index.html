@@ -1,0 +1,789 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Go Invaders — learn Go, blast bugs</title>
+<style>
+/* Go Invaders — retro arcade, zero deps */
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  background: #05060f; color: #e8e8ff;
+  font-family: "Courier New", monospace;
+  display: flex; justify-content: center; align-items: center;
+  min-height: 100vh;
+}
+#wrap { position: relative; width: min(760px, 96vw); }
+canvas {
+  border: 2px solid #1c2340; border-radius: 6px;
+  background: #05060f; display: block;
+  width: 100%; height: auto;
+  box-shadow: 0 0 40px rgba(60, 80, 200, .25);
+}
+kbd {
+  background: #1c2340; border: 1px solid #3a4470; border-radius: 4px;
+  padding: 1px 6px; font-size: 12px;
+}
+/* menu + game-over overlays */
+#menu, #over {
+  position: absolute; inset: 0; display: flex; flex-direction: column;
+  justify-content: center; align-items: center; gap: 18px;
+  background: rgba(5, 6, 15, .92); text-align: center; padding: 30px;
+  overflow-y: auto;
+}
+#over { display: none; }
+h1 { font-size: clamp(28px, 7vw, 44px); letter-spacing: 6px; }
+h1 span { color: #7CFC9A; }
+h2 { font-size: 30px; color: #ff6b6b; letter-spacing: 3px; }
+#overtitle.win { color: #7CFC9A; }
+.sub, .ctrl { max-width: 560px; line-height: 1.6; color: #aab; font-size: 14px; }
+button {
+  font-family: inherit; font-size: 18px; cursor: pointer;
+  background: #7CFC9A; color: #05060f; border: 0; border-radius: 6px;
+  padding: 12px 30px; letter-spacing: 2px; font-weight: bold;
+}
+button:hover { background: #aaffc3; }
+/* question panel */
+#qbox {
+  display: none; position: absolute; left: 50%; bottom: 70px;
+  transform: translateX(-50%); width: min(620px, 94%);
+  background: #0b0e1f; border: 2px solid #8be9fd; border-radius: 8px;
+  padding: 16px; box-shadow: 0 0 30px rgba(139, 233, 253, .35);
+}
+#qtext { font-size: 17px; margin-bottom: 12px; white-space: pre-wrap; }
+#qopts { display: flex; flex-direction: column; gap: 8px; }
+.qopt {
+  background: #141936; color: #e8e8ff; border: 1px solid #3a4470;
+  border-radius: 6px; padding: 9px 12px; font-size: 15px;
+  text-align: left; font-family: inherit; letter-spacing: 0;
+}
+.qopt:hover { border-color: #ffd166; color: #ffd166; background: #141936; }
+#qfill { display: none; gap: 8px; }
+#qinput {
+  flex: 1; background: #141936; border: 1px solid #3a4470; border-radius: 6px;
+  color: #7CFC9A; font-family: inherit; font-size: 17px; padding: 9px 12px;
+  outline: none;
+}
+#qinput:focus { border-color: #7CFC9A; }
+#qsend { padding: 9px 18px; font-size: 15px; }
+.qwhy { margin-top: 10px; font-size: 14px; min-height: 18px; }
+.qwhy.ok { color: #7CFC9A; } .qwhy.bad { color: #ff6b6b; }
+/* codex */
+h3 { color: #8be9fd; font-size: 15px; letter-spacing: 2px; }
+#codex {
+  max-height: 180px; overflow-y: auto; width: min(600px, 100%); text-align: left;
+  font-size: 13px; line-height: 1.5;
+}
+.codex-line { border-bottom: 1px dashed #1c2340; padding: 6px 2px; color: #ccd; }
+/* touch controls: only on touch screens */
+#touch { display: none; gap: 10px; margin-top: 10px; }
+#touch button {
+  flex: 1; padding: 16px 0; font-size: 20px;
+  touch-action: manipulation; user-select: none; -webkit-user-select: none;
+}
+@media (pointer: coarse) { #touch { display: flex; } }
+
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="game" width="760" height="560"></canvas>
+
+  <div id="touch">
+    <button id="tLeft" aria-label="Move left">◀</button>
+    <button id="tFire">FIRE</button>
+    <button id="tRight" aria-label="Move right">▶</button>
+  </div>
+
+  <div id="menu">
+    <h1>GO <span>INVADERS</span></h1>
+    <p class="sub">8 waves of Go concepts. Press <kbd>Space</kbd> for a
+      question &mdash; answer right to <b>load a shot</b>, then aim and press
+      <kbd>Space</kbd> again to fire. Dodge their bullets. Wrong answers make
+      the whole fleet advance, and the Machine remembers what got you.</p>
+    <p class="ctrl"><kbd>←</kbd>/<kbd>→</kbd> or <kbd>A</kbd>/<kbd>D</kbd> move
+      · <kbd>Space</kbd> question / fire · <kbd>1–4</kbd> answer · <kbd>Esc</kbd> back off
+      <br>On a phone, use the ◀ FIRE ▶ buttons under the screen.</p>
+    <button id="startBtn">► LAUNCH</button>
+  </div>
+
+  <div id="qbox">
+    <div id="qtext"></div>
+    <div id="qopts"></div>
+    <div id="qfill">
+      <input id="qinput" spellcheck="false" autocomplete="off"
+             placeholder="type the missing Go token…">
+      <button id="qsend">FIRE</button>
+    </div>
+    <div id="qwhy"></div>
+  </div>
+
+  <div id="over">
+    <h2 id="overtitle">GAME OVER</h2>
+    <div id="overscore"></div>
+    <h3>MACHINE CODEX — what got you</h3>
+    <div id="codex"></div>
+    <button id="againBtn">↻ FLY AGAIN</button>
+  </div>
+</div>
+<script>
+/* ---- questions.js ---- */
+// Go Invaders — question bank.
+// Wave 1 hello & print → Wave 8 concurrency boss. Types: "mc" (multiple
+// choice) and "fill" (type-the-blank; answer compared after trim,
+// alternatives via "alt"). Grading rule from Hangman Academy review:
+// every answer must be reachable by the taught material, and wrong
+// options must be plausible mistakes, not typos.
+window.__questions = [
+  // ---------------- Wave 1: Hello, Go ----------------
+  { w: 1, t: "mc",   q: "Which line prints text to the screen?",
+    a: "fmt.Println(\"hi\")", wrong: ["print(hi)", "console.log(\"hi\")", "echo \"hi\""],
+    why: "fmt.Println writes a line to standard out." },
+  { w: 1, t: "mc",   q: "What's the first line of a runnable Go program?",
+    a: "package main", wrong: ["func main()", "import \"fmt\"", "#include <stdio.h>"],
+    why: "Every Go file starts by naming its package, and a runnable program's package is main." },
+  { w: 1, t: "mc",   q: "Which function must every runnable Go program have?",
+    a: "func main()", wrong: ["func start()", "func init()", "func run()"],
+    why: "main() is the entry point. init() is optional setup code that runs before it." },
+  { w: 1, t: "fill", q: "Fill the blank: ____(\"Go!\")  // prints a line",
+    a: "fmt.Println",
+    why: "fmt.Println prints a whole line; fmt.Print works too but the question asks for the line printer." },
+  { w: 1, t: "mc",   q: "How do you run a Go program from the terminal?",
+    a: "go run main.go", wrong: ["node main.go", "python main.go", "run go main.go"],
+    why: "go run compiles and runs in one step." },
+  { w: 1, t: "fill", q: "Fill the import: import \"____\"",
+    a: "fmt", why: "fmt is Go's formatting/printing package." },
+
+  // ---------------- Wave 2: Variables & types ----------------
+  { w: 2, t: "mc",   q: "Which declares AND assigns a new variable?",
+    a: "x := 5", wrong: ["x = 5", "x == 5", "int x = 5"],
+    why: ":= declares and assigns in one step." },
+  { w: 2, t: "mc",   q: "x = 5 (no colon) does what if x is NOT declared?",
+    a: "Compile error", wrong: ["Declares x", "x becomes 5 anyway", "x = nil"],
+    why: "= only assigns; the variable must already exist." },
+  { w: 2, t: "fill", q: "Short declare: name ____ \"Ada\"",
+    a: ":=",
+    why: "name := \"Ada\" declares and assigns in one step." },
+  { w: 2, t: "mc",   q: "Which is Go's integer type (generic size)?",
+    a: "int", wrong: ["integer", "num", "Integer"],
+    why: "int is the default whole-number type." },
+  { w: 2, t: "mc",   q: "Unused variables cause...",
+    a: "A compile error", wrong: ["A warning only", "Nothing", "A runtime panic"],
+    why: "Go refuses to compile with declared-but-unused variables." },
+  { w: 2, t: "fill", q: "Type: var count ____", a: "int",
+    why: "var count int declares an int variable." },
+
+  // ---------------- Wave 3: Control flow ----------------
+  { w: 3, t: "mc",   q: "Correct if statement (no parentheses needed)?",
+    a: "if x > 3 {", wrong: ["if (x > 3) then {", "if x > 3:", "if x > 3 do {"],
+    why: "Go if needs no parens and requires braces." },
+  { w: 3, t: "fill", q: "Fill: ____ i := 0; i < 5; i++ {", a: "for",
+    why: "Go has ONE loop keyword: for." },
+  { w: 3, t: "mc",   q: "How many loop keywords does Go have?",
+    a: "One: for", wrong: ["for and while", "for, while, do", "loop and for"],
+    why: "for covers every loop shape in Go." },
+  { w: 3, t: "mc",   q: "Which skips to the next loop iteration?",
+    a: "continue", wrong: ["pass", "skip", "break"],
+    why: "continue jumps to the next iteration; break exits the loop." },
+  { w: 3, t: "fill", q: "Exit a loop early: ____", a: "break",
+    why: "break stops the loop immediately." },
+  { w: 3, t: "mc",   q: "switch in Go... ",
+    a: "does NOT fall through cases", wrong: ["falls through like C", "requires default first", "only works on strings"],
+    why: "Go cases break automatically — no break needed." },
+
+  // ---------------- Wave 4: Functions ----------------
+  { w: 4, t: "fill", q: "Define: ____ add(a, b int) int {", a: "func",
+    why: "func starts every function definition." },
+  { w: 4, t: "mc",   q: "Type order in Go functions?",
+    a: "name(arg type) type", wrong: ["type name(arg)", "name(type arg) type", "name(arg) -> type"],
+    why: "Types FOLLOW names: func add(a int, b int) int." },
+  { w: 4, t: "mc",   q: "A function that returns nothing writes:",
+    a: "func hi() {", wrong: ["func void hi() {", "func hi() void {", "def hi():"],
+    why: "No return type listed means no return value." },
+  { w: 4, t: "mc",   q: "Multiple returns: which is valid?",
+    a: "func f() (int, error) {", wrong: ["func f() int, error {", "func f() returns (int, error) {", "func f() -> (int, error) {"],
+    why: "Multiple return types go in parentheses." },
+  { w: 4, t: "fill", q: "Return two values: ____ a, nil", a: "return",
+    why: "return hands values back to the caller." },
+  { w: 4, t: "mc",   q: "a, b := b, a does what?",
+    a: "Swaps a and b", wrong: ["Errors", "Sets both to 0", "Copies b into a only"],
+    why: "Go evaluates the right side first — built-in swap." },
+
+  // ---------------- Wave 5: Collections ----------------
+  { w: 5, t: "mc",   q: "len(s) on a slice returns...",
+    a: "Number of elements", wrong: ["Bytes in memory", "Capacity", "The last index"],
+    why: "len counts elements; cap shows capacity." },
+  { w: 5, t: "fill", q: "Add to a slice: s = ____ (s, x)", a: "append",
+    why: "append returns a NEW slice — always reassign." },
+  { w: 5, t: "mc",   q: "Why write s = append(s, x) and not just append(s, x)?",
+    a: "append returns a new slice header", wrong: ["append mutates but prints noise", "Go requires the result printed", "It's optional style"],
+    why: "append may build a brand-new slice, so you must keep its result. Go won't even compile append(s, x) on a line by itself." },
+  { w: 5, t: "mc",   q: "Access the 2nd element of slice s:",
+    a: "s[1]", wrong: ["s[2]", "s(2)", "s.at(2)"],
+    why: "Indexes start at 0." },
+  { w: 5, t: "mc",   q: "Create a map with string keys, int values:",
+    a: "map[string]int{}", wrong: ["map[int]string{}", "{string: int}", "dict[str, int]"],
+    why: "map[keyType]valueType{} — key first." },
+  { w: 5, t: "fill", q: "In for k, v := range m, k holds each map ____", a: "key",
+    alt: ["key name", "keys"],
+    why: "range over a map gives the key first, then the value." },
+
+  // ---------------- Wave 6: Pointers & structs ----------------
+  { w: 6, t: "mc",   q: "&x gives you...",
+    a: "A pointer to x", wrong: ["A copy of x", "The address as text", "A new int"],
+    why: "& takes the address: &x is *T." },
+  { w: 6, t: "fill", q: "Read the value a pointer p points at: ____p", a: "*",
+    why: "*p dereferences the pointer." },
+  { w: 6, t: "mc",   q: "Go has pointer ARITHMETIC (p + 1)?",
+    a: "No — that's C, not Go", wrong: ["Yes, like C", "Only on arrays", "Only for strings"],
+    why: "Go pointers can't be stepped through memory." },
+  { w: 6, t: "mc",   q: "Define a struct type:",
+    a: "type Hero struct {", wrong: ["struct Hero {", "type Hero = struct(", "class Hero {"],
+    why: "type NAME struct { fields }." },
+  { w: 6, t: "fill", q: "Fill: p := ____ x   // now p is *int", a: "&",
+    why: "&x takes the address of x." },
+  { w: 6, t: "mc",   q: "new(T) returns...",
+    a: "A *T pointing at a zeroed T", wrong: ["A copy of T", "nil", "A compile error without init"],
+    why: "new allocates and returns a pointer to the zero value." },
+
+  // ---------------- Wave 7: Errors & methods ----------------
+  { w: 7, t: "mc",   q: "Go's idiomatic error type?",
+    a: "error", wrong: ["Exception", "Error!", "Result"],
+    why: "error is a plain interface; no exceptions." },
+  { w: 7, t: "fill", q: "Idiomatic check: if err ____ nil {", a: "!=",
+    why: "if err != nil — check errors, don't ignore them." },
+  { w: 7, t: "mc",   q: "Attach a method to type Hero:",
+    a: "func (h Hero) Greet() {", wrong: ["def greet(self):", "function Hero::greet()", "method Hero.greet() {"],
+    why: "The receiver (h Hero) sits between func and the name." },
+  { w: 7, t: "mc",   q: "Method on *Hero instead of Hero means it can...",
+    a: "Modify the original", wrong: ["Run faster always", "Skip the receiver", "Return two values"],
+    why: "Pointer receiver mutates; value receiver copies." },
+  { w: 7, t: "mc",   q: "fmt.Errorf's %w does what?",
+    a: "Wraps an error for errors.Is", wrong: ["Writes to a file", "Formats without newlines", "Panics"],
+    why: "%w keeps the chain so errors.Is/As work." },
+  { w: 7, t: "fill", q: "Fill: return ____(\"bad: %w\", err)", a: "fmt.Errorf",
+    why: "fmt.Errorf builds a wrapped error value." },
+
+  // ---------------- Wave 8: Concurrency boss ----------------
+  { w: 8, t: "mc",   q: "Run f concurrently:",
+    a: "go f()", wrong: ["async f()", "spawn f()", "thread(f)"],
+    why: "The go keyword launches a goroutine." },
+  { w: 8, t: "fill", q: "Send x into channel ch: ch ____ x", a: "<-",
+    why: "ch <- x sends; x := <-ch receives." },
+  { w: 8, t: "mc",   q: "A channel with NO buffer blocks until...",
+    a: "A receiver is ready", wrong: ["1000 messages queue", "It flushes every second", "Nothing — sends never wait"],
+    why: "Unbuffered channels hand off directly, synchronising both sides." },
+  { w: 8, t: "mc",   q: "Waiting for 3 goroutines: which tool?",
+    a: "sync.WaitGroup", wrong: ["Thread.join x3", "time.Sleep(3)", "chan close only"],
+    why: "wg.Add(3); wg.Done(); wg.Wait() is the pattern." },
+  { w: 8, t: "mc",   q: "select in Go is like switch but for...",
+    a: "Channel operations", wrong: ["Types", "Network ports", "Struct fields"],
+    why: "select waits on multiple channel cases." },
+  { w: 8, t: "fill", q: "WaitGroup method that signals finish: wg.____()", a: "Done",
+    why: "Each goroutine calls wg.Done() when finished." },
+];
+
+</script>
+<script>
+/* ---- game.js ---- */
+// Go Invaders — game engine.
+// Loop: press FIRE to get a Go question -> answer right to LOAD a shot ->
+// aim and FIRE a real bullet. Invaders march as a block, speed up as you
+// thin them out, and shoot back. Wrong answers make the whole fleet advance.
+// Pure HTML/JS, zero dependencies, zero network.
+(function () {
+  "use strict";
+  var Q = window.__questions;
+  var WAVES = 8;
+
+  function $(id) { return document.getElementById(id); }
+
+  // ---- state ----
+  var S = {
+    mode: "menu",           // menu | play | question | feedback | over | win
+    level: 1, score: 0, lives: 3, combo: 0, best: 0,
+    ship: { x: 0, w: 46, speed: 340 },
+    ammo: 0,                // 1 = a shot is loaded and ready to fire
+    enemies: [], shots: [], enemyShots: [], particles: [],
+    keys: {},
+    dir: 1,                 // formation marching direction (1 right, -1 left)
+    enemyFireT: 0,          // countdown to the next enemy shot
+    invuln: 0,              // brief safety after a question closes or a hit
+    waveTotal: 0, waveKilled: 0,
+    qQueue: [], q: null, qOpts: null,
+    codex: [],              // missed questions (saved across games)
+    runMisses: [],          // missed questions THIS game, shown at the end
+    retries: 0, missedThis: false,
+    fbT: 0, fbAfter: null,
+    t: 0, last: 0, flash: 0, msg: "", msgT: 0
+  };
+
+  var cv = $("game"), ctx = cv.getContext("2d");
+  var W = cv.width, H = cv.height;
+  var SHIP_Y = H - 46;          // ship centre line
+  var BREACH_Y = H - 110;       // invaders below this line have "landed"
+
+  // ---- persistence ----
+  function save() {
+    try {
+      localStorage.setItem("go-invaders-save", JSON.stringify(
+        { best: S.best, codex: S.codex.slice(-40) }));
+    } catch (e) {}
+  }
+  function load() {
+    try {
+      var d = JSON.parse(localStorage.getItem("go-invaders-save") || "{}");
+      S.best = d.best || 0; S.codex = d.codex || [];
+    } catch (e) {}
+  }
+
+  // ---- seeded shuffle per wave (stable question order) ----
+  function seeded(n) { // xorshift
+    return function () {
+      n ^= n << 13; n ^= n >>> 17; n ^= n << 5; n |= 0;
+      return (n >>> 0) / 4294967296;
+    };
+  }
+  function waveQuestions(level) {
+    var arr = Q.filter(function (q) { return q.w === level; });
+    var rnd = seeded(level * 7919 + 17);
+    for (var i = arr.length - 1; i > 0; i--) {
+      var j = Math.floor(rnd() * (i + 1));
+      var t = arr[i]; arr[i] = arr[j]; arr[j] = t;
+    }
+    return arr;
+  }
+
+  // ---- wave setup: a tight block that has room to march ----
+  function startLevel(level) {
+    S.level = level;
+    var count = waveQuestions(level).length;
+    var cols = Math.min(count, 5), rows = Math.ceil(count / cols);
+    var gap = 72, left = W / 2 - (cols - 1) * gap / 2;
+    S.enemies = [];
+    for (var i = 0; i < count; i++) {
+      var r = Math.floor(i / cols), c = i % cols;
+      var y = 70 + r * 50;
+      S.enemies.push({ x: left + c * gap, y: y, y0: y, w: 40, h: 28, alive: true });
+    }
+    S.waveTotal = count; S.waveKilled = 0;
+    S.qQueue = waveQuestions(level);
+    S.shots = []; S.enemyShots = []; S.particles = [];
+    S.ammo = 0; S.combo = 0; S.dir = 1;
+    S.enemyFireT = 2.5; S.invuln = 1;
+    S.ship.x = W / 2;
+    S.mode = "play";
+    banner("WAVE " + level + " — INCOMING");
+  }
+
+  function banner(text) { S.msg = text; S.msgT = 1.6; }
+  function alive() { return S.enemies.filter(function (e) { return e.alive; }); }
+
+  // March speed rises as the fleet thins out — the classic last-invader rush.
+  function marchSpeed() {
+    var left = alive().length / Math.max(S.waveTotal, 1);
+    return (28 + S.level * 8) * (1 + 2.5 * (1 - left));
+  }
+  function enemyFireEvery() { return Math.max(0.7, 2.4 - S.level * 0.2); }
+
+  // ---- FIRE: shoot if loaded, otherwise ask for a question ----
+  function pressFire() {
+    if (S.mode === "feedback") { endFeedback(); return; }
+    if (S.mode !== "play") return;
+    if (S.ammo > 0) { fireShot(); return; }
+    openQuestion();
+  }
+  function fireShot() {
+    S.ammo = 0;
+    S.shots.push({ x: S.ship.x, y: SHIP_Y - 24 });
+  }
+
+  // ---- question panel ----
+  function buildOptions(q) {
+    var opts = [q.a].concat(q.wrong || []).slice(0, 4);
+    var h = 2166136261 >>> 0;
+    for (var s = 0; s < q.q.length; s++) { h ^= q.q.charCodeAt(s); h = Math.imul(h, 16777619) >>> 0; }
+    var rnd = seeded(h);
+    for (var i = opts.length - 1; i > 0; i--) {
+      var j = Math.floor(rnd() * (i + 1));
+      var t = opts[i]; opts[i] = opts[j]; opts[j] = t;
+    }
+    return opts;
+  }
+  function openQuestion() {
+    if (!S.qQueue.length) S.qQueue = waveQuestions(S.level); // recycle if shots missed
+    var q = S.qQueue.shift();
+    S.q = q;
+    S.qOpts = q.t === "mc" ? buildOptions(q) : null;
+    S.mode = "question";
+    S.retries = 0; S.missedThis = false;
+    $("qbox").style.display = "block";
+    $("qtext").textContent = q.q;
+    $("qwhy").textContent = ""; $("qwhy").className = "qwhy";
+    $("qopts").style.display = "";
+    var box = $("qopts"); box.innerHTML = "";
+    if (q.t === "mc") {
+      $("qfill").style.display = "none";
+      S.qOpts.forEach(function (opt, i) {
+        var b = document.createElement("button");
+        b.className = "qopt";
+        b.textContent = (i + 1) + ". " + opt;
+        b.onclick = function (ev) { ev.stopPropagation(); answer(opt); };
+        box.appendChild(b);
+      });
+    } else {
+      $("qfill").style.display = "flex";
+      var inp = $("qinput"); inp.value = ""; inp.focus();
+    }
+  }
+  // Esc backs off without penalty; the question goes back to the front.
+  function backOff() {
+    if (S.mode !== "question") return;
+    S.qQueue.unshift(S.q);
+    closeQuestion();
+  }
+  function closeQuestion() {
+    if (S.mode === "question" || S.mode === "feedback") {
+      S.mode = "play";
+      S.invuln = Math.max(S.invuln, 0.8); // you couldn't dodge while thinking
+    }
+    S.q = null;
+    $("qbox").style.display = "none";
+  }
+  function norm(s) { return String(s).trim().replace(/\s+/g, " "); }
+  function recordMiss(q) {
+    if (S.missedThis) return;
+    S.missedThis = true;
+    var entry = { q: q.q, a: q.a, why: q.why };
+    S.codex.push(entry);
+    if (!S.runMisses.some(function (m) { return m.q === q.q; })) S.runMisses.push(entry);
+  }
+  function answer(val) {
+    if (S.mode !== "question" || !S.q) return;
+    var q = S.q, ok = norm(val) === norm(q.a) ||
+      (q.alt && (Array.isArray(q.alt) ? q.alt : [q.alt]).some(function (a) { return norm(val) === norm(a); }));
+    if (ok) {
+      S.combo += 1;
+      S.ammo = 1;
+      showFeedback(true, "✓ SHOT LOADED — aim and fire!  " + q.why, null);
+    } else {
+      S.combo = 0;
+      recordMiss(q);
+      if (q.t === "fill" && S.retries === 0) {
+        S.retries = 1;
+        $("qwhy").textContent = "✗ Not quite — one more try.";
+        $("qwhy").className = "qwhy bad";
+        $("qinput").select(); $("qinput").focus();
+        save();
+        return;
+      }
+      S.qQueue.push(q); // it comes back later in this wave
+      showFeedback(false, "✗ Answer: " + q.a + "  —  " + q.why +
+        "  The invaders advance!", advanceFleet);
+    }
+    save();
+  }
+  function showFeedback(ok, text, after) {
+    S.mode = "feedback"; S.fbAfter = after; S.fbT = ok ? 1.6 : 4;
+    $("qopts").style.display = "none"; $("qfill").style.display = "none";
+    $("qwhy").textContent = text + "   (Space / tap to continue)";
+    $("qwhy").className = "qwhy " + (ok ? "ok" : "bad");
+  }
+  function endFeedback() {
+    if (S.mode !== "feedback") return;
+    var after = S.fbAfter; S.fbAfter = null;
+    closeQuestion();
+    if (after) after();
+  }
+
+  // ---- fleet movement ----
+  function stepDown() {
+    alive().forEach(function (e) { e.y += 18; });
+    checkBreach();
+  }
+  function advanceFleet() { stepDown(); banner("THE FLEET ADVANCES"); }
+  function checkBreach() {
+    if (!alive().some(function (e) { return e.y > BREACH_Y; })) return;
+    // They landed: lose a life, the fleet regroups at the top.
+    S.enemies.forEach(function (e) { e.y = e.y0; });
+    S.enemyShots = [];
+    loseLife("THE INVADERS LANDED!");
+  }
+
+  function loseLife(text) {
+    if (S.mode === "over" || S.mode === "win") return;
+    S.lives -= 1; S.flash = 0.35; S.combo = 0; S.invuln = 1.2;
+    banner(text + "  LIVES: " + Math.max(S.lives, 0));
+    if (S.lives <= 0) gameOver();
+  }
+  function levelClear() {
+    if (S.level >= WAVES) { win(); return; }
+    banner("WAVE CLEAR! +100");
+    S.score += 100;
+    S.enemyShots = []; S.shots = [];
+    var next = S.level + 1;
+    S.mode = "clear";
+    setTimeout(function () { if (S.mode === "clear") startLevel(next); }, 1400);
+  }
+  function gameOver() {
+    S.mode = "over";
+    $("qbox").style.display = "none";
+    if (S.score > S.best) { S.best = S.score; save(); }
+    $("over").style.display = "flex";
+    $("overscore").textContent = "SCORE " + S.score + "  ·  WAVE " + S.level;
+    showCodex();
+  }
+  function win() {
+    S.mode = "win";
+    if (S.score > S.best) { S.best = S.score; save(); }
+    $("over").style.display = "flex";
+    $("overtitle").textContent = "YOU BEAT THE MACHINE";
+    $("overtitle").className = "win";
+    $("overscore").textContent = "FINAL SCORE " + S.score + "  ·  ALL 8 WAVES";
+    showCodex();
+  }
+
+  // ---- codex review ----
+  function addCodexLine(c) {
+    var d = document.createElement("div");
+    d.className = "codex-line";
+    d.textContent = c.q + "  →  " + c.a + "  (" + c.why + ")";
+    $("codex").appendChild(d);
+  }
+  function showCodex() {
+    $("codex").innerHTML = "";
+    if (!S.runMisses.length) {
+      addCodexLine({ q: "No misses this run", a: "flawless", why: "nothing to review" });
+      return;
+    }
+    S.runMisses.forEach(function (c) { addCodexLine(c); });
+  }
+
+  // ---- effects ----
+  function boom(x, y, color) {
+    for (var i = 0; i < 18; i++) {
+      S.particles.push({ x: x, y: y, vx: (Math.random() - .5) * 260,
+        vy: (Math.random() - .5) * 260, t: .6, color: color });
+    }
+  }
+  function tickEffects(dt) {
+    S.particles.forEach(function (p) { p.t -= dt; p.x += p.vx * dt; p.y += p.vy * dt; });
+    S.particles = S.particles.filter(function (p) { return p.t > 0; });
+    if (S.flash > 0) S.flash -= dt;
+    if (S.msgT > 0) S.msgT -= dt;
+  }
+
+  // ---- update ----
+  function step(dt) {
+    if (S.mode === "feedback") {
+      tickEffects(dt);
+      S.fbT -= dt;
+      if (S.fbT <= 0) endFeedback();
+      return;
+    }
+    if (S.mode === "clear") { tickEffects(dt); return; }
+    if (S.mode !== "play") return;
+
+    // ship
+    var sp = S.ship.speed * dt;
+    if (S.keys.ArrowLeft || S.keys.a) S.ship.x -= sp;
+    if (S.keys.ArrowRight || S.keys.d) S.ship.x += sp;
+    S.ship.x = Math.max(30, Math.min(W - 30, S.ship.x));
+    if (S.invuln > 0) S.invuln -= dt;
+
+    // fleet marches as one block; bounce off an edge = step down
+    var live = alive();
+    var dx = S.dir * marchSpeed() * dt;
+    var hitEdge = live.some(function (e) {
+      return e.x + dx < 26 || e.x + dx > W - 26;
+    });
+    if (hitEdge) { S.dir *= -1; stepDown(); }
+    else live.forEach(function (e) { e.x += dx; });
+    if (S.mode !== "play") return; // a landing may have ended the game
+
+    // invaders shoot back: a random invader at the bottom of its column
+    S.enemyFireT -= dt;
+    if (S.enemyFireT <= 0 && live.length) {
+      S.enemyFireT = enemyFireEvery() * (0.6 + Math.random() * 0.8);
+      var shooters = live.filter(function (e) {
+        return !live.some(function (o) { return o !== e && Math.abs(o.x - e.x) < 10 && o.y > e.y; });
+      });
+      var s = shooters[Math.floor(Math.random() * shooters.length)];
+      S.enemyShots.push({ x: s.x, y: s.y + s.h / 2, v: 150 + S.level * 18 });
+    }
+    S.enemyShots.forEach(function (b) { b.y += b.v * dt; });
+    S.enemyShots = S.enemyShots.filter(function (b) {
+      var hitShip = b.y > SHIP_Y - 20 && b.y < SHIP_Y + 14 &&
+        Math.abs(b.x - S.ship.x) < 20;
+      if (hitShip && S.invuln <= 0) {
+        boom(S.ship.x, SHIP_Y, "#ff6b6b");
+        loseLife("HIT!");
+        return false;
+      }
+      return b.y < H;
+    });
+    if (S.mode !== "play") return;
+
+    // your shots fly up; hit an invader or miss off the top
+    S.shots.forEach(function (b) { b.y -= 560 * dt; });
+    S.shots = S.shots.filter(function (b) {
+      var target = null;
+      alive().forEach(function (e) {
+        if (!target && Math.abs(b.x - e.x) < e.w / 2 + 2 && Math.abs(b.y - e.y) < e.h / 2 + 6) target = e;
+      });
+      if (target) {
+        target.alive = false; S.waveKilled += 1;
+        var pts = 10 * S.level * Math.max(1, S.combo);
+        S.score += pts;
+        boom(target.x, target.y, "#7CFC9A");
+        if (S.waveKilled >= S.waveTotal) levelClear();
+        return false;
+      }
+      if (b.y < 0) { S.combo = 0; banner("MISSED — answer again to reload"); return false; }
+      return true;
+    });
+
+    tickEffects(dt);
+  }
+
+  // ---- draw ----
+  function draw() {
+    ctx.fillStyle = "#05060f";
+    ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = "#1c2340";
+    for (var i = 0; i < 60; i++) {
+      var sx = (i * 137.5) % W, sy = ((i * 89.3) + S.t * 12 * ((i % 3) + 1)) % H;
+      ctx.fillRect(sx, sy, 2, 2);
+    }
+    // landing line
+    ctx.strokeStyle = "#2a1c30"; ctx.setLineDash([6, 6]);
+    ctx.beginPath(); ctx.moveTo(0, BREACH_Y + 14); ctx.lineTo(W, BREACH_Y + 14); ctx.stroke();
+    ctx.setLineDash([]);
+    // invaders
+    S.enemies.forEach(function (e) {
+      if (!e.alive) return;
+      var frame = Math.floor(S.t * 3) % 2; // two-frame wiggle
+      ctx.fillStyle = "#8be9fd";
+      ctx.fillRect(e.x - e.w / 2, e.y - e.h / 2, e.w, e.h - 6);
+      ctx.fillRect(e.x - e.w / 2 + (frame ? 2 : 6), e.y + e.h / 2 - 6, 8, 6);
+      ctx.fillRect(e.x + e.w / 2 - (frame ? 10 : 14), e.y + e.h / 2 - 6, 8, 6);
+      ctx.fillStyle = "#05060f";
+      ctx.fillRect(e.x - 9, e.y - 6, 6, 6); ctx.fillRect(e.x + 3, e.y - 6, 6, 6);
+    });
+    // enemy shots
+    ctx.fillStyle = "#ff6b6b";
+    S.enemyShots.forEach(function (b) { ctx.fillRect(b.x - 2, b.y - 7, 4, 14); });
+    // your shots
+    ctx.fillStyle = "#7CFC9A";
+    S.shots.forEach(function (b) { ctx.fillRect(b.x - 2, b.y - 10, 4, 20); });
+    // ship: bright when loaded, dim when empty; blinks while invulnerable
+    if (!(S.invuln > 0 && Math.floor(S.t * 12) % 2)) {
+      var x = S.ship.x, y = SHIP_Y;
+      ctx.fillStyle = S.ammo ? "#7CFC9A" : "#3f7a52";
+      ctx.beginPath();
+      ctx.moveTo(x, y - 22); ctx.lineTo(x - 23, y + 12); ctx.lineTo(x + 23, y + 12);
+      ctx.closePath(); ctx.fill();
+      if (S.ammo) { ctx.fillStyle = "#eaffef"; ctx.fillRect(x - 2, y - 30, 4, 10); }
+    }
+    // particles
+    S.particles.forEach(function (p) {
+      ctx.globalAlpha = Math.max(p.t / .6, 0);
+      ctx.fillStyle = p.color; ctx.fillRect(p.x - 2, p.y - 2, 4, 4);
+      ctx.globalAlpha = 1;
+    });
+    if (S.flash > 0) {
+      ctx.fillStyle = "rgba(255,60,60," + (S.flash * 0.5) + ")";
+      ctx.fillRect(0, 0, W, H);
+    }
+    if (S.msgT > 0) {
+      ctx.fillStyle = "#ffd166"; ctx.font = "bold 22px monospace";
+      ctx.textAlign = "center"; ctx.fillText(S.msg, W / 2, H / 2 - 40);
+    }
+    // HUD
+    ctx.fillStyle = "#e8e8ff"; ctx.font = "14px monospace"; ctx.textAlign = "left";
+    ctx.fillText("SCORE " + S.score, 14, 22);
+    ctx.fillText("WAVE " + S.level + "/" + WAVES, 14, 40);
+    ctx.fillStyle = S.ammo ? "#7CFC9A" : "#aab";
+    ctx.fillText(S.ammo ? "SHOT READY — FIRE!" : "FIRE = get a question", 14, H - 12);
+    ctx.fillStyle = "#e8e8ff"; ctx.textAlign = "right";
+    ctx.fillText("COMBO x" + Math.max(1, S.combo) + "  LIVES " + "♥".repeat(Math.max(S.lives, 0)) + "  BEST " + S.best, W - 14, 22);
+    ctx.textAlign = "left";
+  }
+
+  // ---- input ----
+  window.addEventListener("keydown", function (e) {
+    S.keys[e.key] = true;
+    if (S.mode === "feedback") {
+      if (e.key === " " || e.key === "Enter" || e.key === "Escape") {
+        e.preventDefault(); endFeedback();
+      }
+      return;
+    }
+    if (S.mode === "play" && (e.key === " " || e.key === "ArrowUp" || e.key === "w")) {
+      e.preventDefault();
+      pressFire();
+      return;
+    }
+    if (S.mode === "question" && S.q && S.q.t === "mc") {
+      var n = parseInt(e.key, 10);
+      if (n >= 1 && n <= (S.qOpts || []).length) answer(S.qOpts[n - 1]);
+    }
+    if (S.mode === "question" && S.q && S.q.t === "fill" && e.key === "Enter") {
+      answer($("qinput").value);
+    }
+    if (S.mode === "question" && e.key === "Escape") backOff();
+  });
+  window.addEventListener("keyup", function (e) { S.keys[e.key] = false; });
+
+  // ---- buttons ----
+  function newGame() {
+    $("menu").style.display = "none"; $("over").style.display = "none";
+    $("overtitle").textContent = "GAME OVER"; $("overtitle").className = "";
+    $("codex").innerHTML = "";
+    S.score = 0; S.lives = 3; S.level = 1; S.combo = 0;
+    S.runMisses = []; S.retries = 0;
+    startLevel(1);
+  }
+  $("startBtn").onclick = newGame;
+  $("againBtn").onclick = newGame;
+  $("qsend").onclick = function (ev) {
+    ev.stopPropagation();
+    if (S.mode === "question" && S.q && S.q.t === "fill") answer($("qinput").value);
+  };
+  $("qbox").addEventListener("click", function () {
+    if (S.mode === "feedback") endFeedback();
+  });
+
+  // touch controls (shown on phones/tablets via CSS)
+  function hold(id, key) {
+    var b = $(id);
+    if (!b) return;
+    b.addEventListener("pointerdown", function (ev) { ev.preventDefault(); S.keys[key] = true; });
+    ["pointerup", "pointerleave", "pointercancel"].forEach(function (n) {
+      b.addEventListener(n, function () { S.keys[key] = false; });
+    });
+  }
+  hold("tLeft", "ArrowLeft");
+  hold("tRight", "ArrowRight");
+  if ($("tFire")) $("tFire").addEventListener("pointerdown", function (ev) {
+    ev.preventDefault(); pressFire();
+  });
+
+  // ---- main loop ----
+  function frame(ts) {
+    var dt = Math.min((ts - S.last) / 1000 || 0.016, 0.05);
+    S.last = ts; S.t += dt;
+    step(dt); draw();
+    requestAnimationFrame(frame);
+  }
+
+  load();
+  window.__goInvaders = { S: S, startLevel: startLevel, answer: answer,
+    pressFire: pressFire, step: step, waveQuestions: waveQuestions,
+    setLives: function (n) { S.lives = n; } };
+  requestAnimationFrame(frame);
+})();
+
+</script>
+</body>
+</html>
